@@ -35,6 +35,10 @@ namespace Shadowsocks.Controller.Strategy
             public Server server;
 
             public int times;
+            /// <summary>
+            /// 错误次数
+            /// </summary>
+            public int failureTimes { get; set; }
 
             public double score;
         }
@@ -115,27 +119,40 @@ namespace Shadowsocks.Controller.Strategy
                 // 100 * failure - 2 * latency - 0.5 * (lastread - lastwrite)
                 status.score =
                     100 * 1000 * Math.Min(5 * 60, (now - status.lastFailure).TotalSeconds)
-                    -2 * 5 * (Math.Min(2000, status.latency.TotalMilliseconds) / (1 + (now - status.lastTimeDetectLatency).TotalSeconds / 30 / 10) +
+                    - 2 * 5 * (Math.Min(2000, status.latency.TotalMilliseconds) / (1 + (now - status.lastTimeDetectLatency).TotalSeconds / 30 / 10) +
                     -0.5 * 200 * Math.Min(5, (status.lastRead - status.lastWrite).TotalSeconds));
                 logger.Debug(String.Format("server: {0} latency:{1} score: {2}", status.server.ToString(), status.latency, status.score));
             }
+            var totalCount = servers.Count;
+            var minCount = Convert.ToInt32(totalCount * 0.5);
+            var query = servers.Where(r => r.failureTimes <= 1);
+           // query = query.Where(r => (r.lastRead - r.lastWrite).TotalMilliseconds < 5000);
 
-            if (servers.Any(r => r.score > 0&&r.times>3))//如果全部运行3次按评分倒序去70%
+            //if (servers.Any(r => r.score > 0&&r.times>3))//如果全部运行3次按评分倒序去70%
+            //{
+            //    var takeCount = Convert.ToInt32(servers.Count * 0.7);
+            //    var configs = servers.OrderByDescending(r => r.score).Take(takeCount).ToList();
+            //    int index = _random.Next();
+            //    _currentServer = configs[index % configs.Count];
+            //    logger.Info($"按评分负载.{_currentServer.server.ToString()}");
+            //}
+            //else
+            //{
+            var configs = query.ToList();
+            if (configs.Count < minCount)
             {
-                var takeCount = Convert.ToInt32(servers.Count * 0.7);
-                var configs = servers.OrderByDescending(r => r.score).Take(takeCount).ToList();
-                int index = _random.Next();
-                _currentServer = configs[index % configs.Count];
-                logger.Info($"按评分负载.{_currentServer.server.ToString()}");
+                configs = servers.OrderBy(r => r.failureTimes).Take(minCount).ToList();
             }
-            else
-            {
-                var configs = servers;
-                int index = _random.Next();
-                _currentServer = configs[index % configs.Count];
-                logger.Info($"HA switching to server: {_currentServer.server.ToString()}");
-            }
-            
+            int index = _random.Next();
+            _currentServer = configs[index % configs.Count];
+            var latency = Convert.ToInt32((_currentServer.lastRead - _currentServer.lastWrite).TotalMilliseconds);
+            _currentServer.times++;
+            _currentServer.latency = new TimeSpan(0,0,0,0, latency);
+
+
+            logger.Info($"HA switching to server: {_currentServer.server.ToString()},times:{_currentServer.times},count:{configs.Count}");
+            //}
+
             //ServerStatus max = null;
             //foreach (var status in servers)
             //{
@@ -204,7 +221,9 @@ namespace Shadowsocks.Controller.Strategy
             if (_serverStatus.TryGetValue(server, out status))
             {
                 status.lastFailure = DateTime.Now;
+                status.failureTimes++;
             }
+            
         }
     }
 }
