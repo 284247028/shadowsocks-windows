@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Text;
+using System.Linq;
 
 namespace Shadowsocks.Controller.Strategy
 {
@@ -32,6 +33,8 @@ namespace Shadowsocks.Controller.Strategy
             public DateTime lastFailure;
 
             public Server server;
+
+            public int times;
 
             public double score;
         }
@@ -79,14 +82,14 @@ namespace Shadowsocks.Controller.Strategy
             }
             _serverStatus = newServerStatus;
 
-            ChooseNewServer();
+            ChooseNewServer(IStrategyCallerType.TCP);
         }
 
         public Server GetAServer(IStrategyCallerType type, System.Net.IPEndPoint localIPEndPoint, EndPoint destEndPoint)
         {
             if (type == IStrategyCallerType.TCP)
             {
-                ChooseNewServer();
+                ChooseNewServer(type) ;
             }
             if (_currentServer == null)
             {
@@ -101,7 +104,7 @@ namespace Shadowsocks.Controller.Strategy
          * and (now - last read) <  5s  // means not stuck
          * and latency < 200ms, try after 30s
          */
-        public void ChooseNewServer()
+        public void ChooseNewServer(IStrategyCallerType type)
         {
             ServerStatus oldServer = _currentServer;
             List<ServerStatus> servers = new List<ServerStatus>(_serverStatus.Values);
@@ -116,29 +119,46 @@ namespace Shadowsocks.Controller.Strategy
                     -0.5 * 200 * Math.Min(5, (status.lastRead - status.lastWrite).TotalSeconds));
                 logger.Debug(String.Format("server: {0} latency:{1} score: {2}", status.server.ToString(), status.latency, status.score));
             }
-            ServerStatus max = null;
-            foreach (var status in servers)
+
+            if (servers.Any(r => r.score > 0&&r.times>3))//如果全部运行3次按评分倒序去70%
             {
-                if (max == null)
-                {
-                    max = status;
-                }
-                else
-                {
-                    if (status.score >= max.score)
-                    {
-                        max = status;
-                    }
-                }
+                var takeCount = Convert.ToInt32(servers.Count * 0.7);
+                var configs = servers.OrderByDescending(r => r.score).Take(takeCount).ToList();
+                int index = _random.Next();
+                _currentServer = configs[index % configs.Count];
+                logger.Info($"按评分负载.{_currentServer.server.ToString()}");
             }
-            if (max != null)
+            else
             {
-                if (_currentServer == null || max.score - _currentServer.score > 200)
-                {
-                    _currentServer = max;
-                    logger.Info($"HA switching to server: {_currentServer.server.ToString()}");
-                }
+                var configs = servers;
+                int index = _random.Next();
+                _currentServer = configs[index % configs.Count];
+                logger.Info($"HA switching to server: {_currentServer.server.ToString()}");
             }
+            
+            //ServerStatus max = null;
+            //foreach (var status in servers)
+            //{
+            //    if (max == null)
+            //    {
+            //        max = status;
+            //    }
+            //    else
+            //    {
+            //        if (status.score >= max.score)
+            //        {
+            //            max = status;
+            //        }
+            //    }
+            //}
+            //if (max != null)
+            //{
+            //    if (_currentServer == null || max.score - _currentServer.score > 200)
+            //    {
+            //        _currentServer = max;
+            //        logger.Info($"HA switching to server: {_currentServer.server.ToString()}");
+            //    }
+            //}
         }
 
         public void UpdateLatency(Model.Server server, TimeSpan latency)
@@ -150,6 +170,7 @@ namespace Shadowsocks.Controller.Strategy
             {
                 status.latency = latency;
                 status.lastTimeDetectLatency = DateTime.Now;
+                status.times++;
             }
         }
 
